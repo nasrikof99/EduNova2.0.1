@@ -1,0 +1,120 @@
+name: EduNova 2.0 - APK Lengkap (Pasang Terus)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+    paths-ignore:
+      - 'README.md'
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: 1 - Ambil fail daripada GitHub
+        uses: actions/checkout@v4
+
+      - name: 2 - Semak susunan fail
+        shell: bash
+        run: |
+          echo "Direktori projek: $(pwd)"
+          if [ ! -f package.json ]; then
+            echo "::error::Fail package.json tidak ditemui di ROOT repository. Pastikan index.html dan package.json bukan di dalam subfolder EduNova."
+            find . -maxdepth 3 -name package.json -print
+            exit 1
+          fi
+          if [ ! -f src/native.js ] || [ ! -f public/app.js ]; then
+            echo "::error::Folder src atau public tidak lengkap. Sila muat naik SEMUA fail ZIP projek."
+            exit 1
+          fi
+          node --version
+          echo "Struktur projek OK"
+
+      - name: 3 - Sediakan Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: 4 - Sediakan Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      # Gunakan sdkmanager yang SUDAH dipasang pada Ubuntu runner.
+      # setup-android@v3 sengaja dibuang: ia memuat turun tools 16 dan
+      # boleh tersekat pada soalan lesen y/N dalam GitHub Actions.
+      - name: 5 - Terima lesen Android SDK (automatik)
+        shell: bash
+        run: |
+          SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          SDK_MANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$SDK_MANAGER" ]; then
+            echo "::error::sdkmanager tiada di $SDK_MANAGER. Sila kongsi log langkah ini."
+            exit 1
+          fi
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$SDK_ROOT/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "Android SDK: $SDK_ROOT"
+          "$SDK_MANAGER" --version
+          # Dalam GitHub Actions, shell bash berjalan dengan pipefail.
+          # 'yes' boleh tamat dengan SIGPIPE (kod 141) walaupun SDK berjaya.
+          # Matikan pipefail HANYA untuk pipeline ini supaya exit code
+          # yang dinilai ialah exit code sdkmanager, bukan arahan yes.
+          set +o pipefail
+          yes | "$SDK_MANAGER" --licenses
+          set -o pipefail
+          echo "Penerimaan lesen SDK selesai."
+
+      - name: 6 - Pasang Android API 36
+        shell: bash
+        run: |
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --install \
+            'platforms;android-36' \
+            'build-tools;36.0.0' \
+            'platform-tools'
+          test -d "$ANDROID_SDK_ROOT/platforms/android-36"
+          test -d "$ANDROID_SDK_ROOT/build-tools/36.0.0"
+          echo "Android API 36 dan Build Tools 36.0.0 tersedia."
+
+      - name: 7 - Pasang pakej npm
+        run: npm install --no-audit --no-fund
+
+      - name: 8 - Bina aplikasi web
+        run: npm run build
+
+      - name: 9 - Hasilkan projek Android
+        shell: bash
+        run: |
+          npx cap add android
+          npx cap sync android
+          python3 scripts/setup_android.py
+
+      - name: 10 - Kompil APK (papar ralat terperinci)
+        shell: bash
+        working-directory: android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace --console=plain 2>&1 | tee ../gradle-build.log
+
+      - name: 11 - Muat naik APK siap
+        uses: actions/upload-artifact@v4
+        with:
+          name: EduNova-2.0-APK-Lengkap
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Log ralat (jika gagal)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: EduNova-Log-Ralat
+          path: gradle-build.log
+          if-no-files-found: ignore
+          retention-days: 7
