@@ -1,0 +1,10 @@
+{
+  "appId": "my.edunova.app",
+  "appName": "EduNova Full",
+  "webDir": "dist",
+  "plugins": {
+    "LocalNotifications": {
+      "iconColor": "#6157E8"
+    }
+  }
+}
